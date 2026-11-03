@@ -1,0 +1,9 @@
+# Netlify: instala dependencias, ejecuta el modelo y publica la carpeta "site".
+[build]
+  command = "pip install -r requirements.txt && python update.py --site"
+  publish = "site"
+  functions = "netlify/functions"
+
+[build.environment]
+  PYTHON_VERSION = "3.12"
+  # Opcional (panel de Netlify > Environment variables): API_FOOTBALL_KEY, BUILD_HOOK_URL
