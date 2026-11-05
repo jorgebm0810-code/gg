@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Predictor Real Madrid (LaLiga y Champions) - actualización diaria."""
+"""Predictor Real Madrid (LaLiga y Champions) - v3 con Clasificación y Marcadores Exactos."""
 
 import argparse
 import io
@@ -47,7 +47,9 @@ NOMBRES = {
     "Barcelona": "FC Barcelona", "Espanol": "Espanyol", "Alaves": "Alavés", "Cadiz": "Cádiz",
     "Almeria": "Almería", "Santander": "Racing de Santander", "La Coruna": "Deportivo La Coruña",
     "Leganes": "Leganés", "Malaga": "Málaga", "Sp Gijon": "Sporting de Gijón",
-    "Oviedo": "Real Oviedo", "Mallorca": "Mallorca", "Valladolid": "Real Valladolid",
+    "Oviedo": "Real Oviedo", "Mallorca": "Mallorca", "Valladolid": "Real Valladolid", "Girona": "Girona FC",
+    "Osasuna": "Osasuna", "Getafe": "Getafe", "Villarreal": "Villarreal", "Sevilla": "Sevilla FC",
+    "Las Palmas": "UD Las Palmas", "Valencia": "Valencia CF", "Elche": "Elche CF"
 }
 
 SEED_HIST = [
@@ -65,7 +67,7 @@ SEED_2627 = [
     (6, None, "Elche", "V", None, None, "V"),
     (7, None, "Atlético de Madrid", "V", 1, 2, "D"),
     (8, None, "Villarreal", "L", None, None, "V"),
-    (9, None, "Sevilla", "L", 4, 1, "V"),
+    (9, None, "Sevilla FC", "L", 4, 1, "V"),
     (10, None, "FC Barcelona", "V", 2, 1, "V"),
     (11, "2026-11-01", "Racing de Santander", "V", 3, 0, "V"),
 ]
@@ -197,6 +199,22 @@ def fit_strengths(df, ref_date, years=3):
         dfn /= dfn.mean()
     return {"bh": bh, "ba": ba, "att": dict(zip(teams, att)), "dfn": dict(zip(teams, dfn))}
 
+def poisson_matrix(mu_h, mu_a, max_goals=6):
+    k = np.arange(max_goals + 1)
+    fact = np.array([math.factorial(int(i)) for i in k], dtype=float)
+    ph = np.exp(-mu_h) * (mu_h ** k) / fact
+    pa = np.exp(-mu_a) * (mu_a ** k) / fact
+    m = np.outer(ph, pa)
+    m /= m.sum()
+    
+    # Extraer los 3 marcadores más probables
+    scores = []
+    for h in range(max_goals + 1):
+        for a in range(max_goals + 1):
+            scores.append((h, a, m[h, a]))
+    scores.sort(key=lambda x: x[2], reverse=True)
+    return scores[:3]
+
 def poisson_probs(model, home, away, adj_att=1.0, adj_def=1.0):
     mu_h = model["bh"] * model["att"].get(home, 0.85) * model["dfn"].get(away, 1.15)
     mu_a = model["ba"] * model["att"].get(away, 0.85) * model["dfn"].get(home, 1.15)
@@ -212,7 +230,8 @@ def poisson_probs(model, home, away, adj_att=1.0, adj_def=1.0):
     pa = np.exp(-mu_a) * mu_a ** k / fact
     m = np.outer(ph, pa)
     m /= m.sum()
-    return np.tril(m, -1).sum(), np.trace(m), np.triu(m, 1).sum(), mu_h, mu_a
+    top_scores = poisson_matrix(mu_h, mu_a)
+    return np.tril(m, -1).sum(), np.trace(m), np.triu(m, 1).sum(), mu_h, mu_a, top_scores
 
 def madrid_matches(df):
     m = df[(df.HomeTeam == MADRID) | (df.AwayTeam == MADRID)].copy()
@@ -222,6 +241,50 @@ def madrid_matches(df):
     m["GC"] = np.where(m.Home, m.FTAG, m.FTHG)
     m["Res"] = np.where(m.GF > m.GC, "V", np.where(m.GF == m.GC, "E", "D"))
     return m
+
+def get_standings(df, cur):
+    cd = df[df.Season == cur].copy()
+    teams = sorted(set(cd.HomeTeam) | set(cd.AwayTeam))
+    stats = {nombre(t): {"PJ": 0, "V": 0, "E": 0, "D": 0, "GF": 0, "GC": 0, "DG": 0, "Pts": 0} for t in teams}
+    
+    for r in cd.itertuples():
+        h = nombre(r.HomeTeam)
+        a = nombre(r.AwayTeam)
+        gh, ga = int(r.FTHG), int(r.FTAG)
+        
+        stats[h]["PJ"] += 1
+        stats[a]["PJ"] += 1
+        stats[h]["GF"] += gh
+        stats[h]["GC"] += ga
+        stats[a]["GF"] += ga
+        stats[a]["GC"] += gh
+        
+        if gh > ga:
+            stats[h]["V"] += 1
+            stats[h]["Pts"] += 3
+            stats[a]["D"] += 1
+        elif gh < ga:
+            stats[a]["V"] += 1
+            stats[a]["Pts"] += 3
+            stats[h]["D"] += 1
+        else:
+            stats[h]["E"] += 1
+            stats[a]["E"] += 1
+            stats[h]["Pts"] += 1
+            stats[a]["Pts"] += 1
+
+    for t in stats:
+        stats[t]["DG"] = stats[t]["GF"] - stats[t]["GC"]
+
+    tabla = []
+    for team, data in stats.items():
+        data["Equipo"] = team
+        tabla.append(data)
+
+    tabla.sort(key=lambda x: (x["Pts"], x["DG"], x["GF"]), reverse=True)
+    for pos, item in enumerate(tabla, 1):
+        item["Pos"] = pos
+    return tabla
 
 def to_madrid(p3, home):
     return (p3[0], p3[1], p3[2]) if home else (p3[2], p3[1], p3[0])
@@ -417,13 +480,16 @@ def predecir(df, cur, today, ratings, w, L, fixtures):
         t_orig = next((k for k, v in NOMBRES.items() if v == t_name), t_name)
 
         h, a = (MADRID, t_orig) if home else (t_orig, MADRID)
-        pp = poisson_probs(model, h, a, adj_att, adj_def)
+        pp_res = poisson_probs(model, h, a, adj_att, adj_def)
+        pp = pp_res[:3]
+        top_scores = pp_res[5]
+        
         re, rr = ratings.get(MADRID, 1500.0), ratings.get(t_orig, ELO_NEW)
         pe = elo_probs((re + HFA - rr) if home else (rr + HFA - re))
-        pm = to_madrid(pp[:3], home)
+        pm = to_madrid(pp, home)
         pel = to_madrid(pe, home)
         p = [w * pm[i] + (1 - w) * pel[i] for i in range(3)]
-        gm, gr = (pp[3], pp[4]) if home else (pp[4], pp[3])
+        gm, gr = (pp_res[3], pp_res[4]) if home else (pp_res[4], pp_res[3])
 
         rows.append({
             "rival": t_name,
@@ -432,7 +498,8 @@ def predecir(df, cur, today, ratings, w, L, fixtures):
             "p": p,
             "gm": gm,
             "gr": gr,
-            "elo": rr
+            "elo": rr,
+            "top_scores": top_scores
         })
 
     return rows
@@ -445,7 +512,6 @@ def distribucion(pw):
 
 ARIAL = "Arial"
 HEAD = PatternFill("solid", fgColor="1F3864")
-SOFT = PatternFill("solid", fgColor="DDEBF7")
 INPUT = PatternFill("solid", fgColor="FFFF99")
 
 def hdr(ws, row, labels, col=1):
@@ -454,13 +520,6 @@ def hdr(ws, row, labels, col=1):
         c.font = Font(name=ARIAL, bold=True, color="FFFFFF")
         c.fill = HEAD
         c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-def style_all(ws):
-    for row in ws.iter_rows():
-        for c in row:
-            if c.font is None or c.font.name != ARIAL:
-                c.font = Font(name=ARIAL, size=c.font.size or 10, bold=c.font.bold, color=c.font.color,
-                              italic=c.font.italic)
 
 def widths(ws, ws_w):
     for i, w in enumerate(ws_w, 1):
@@ -477,31 +536,11 @@ def write_workbook(path, hist, temporada, bajas, jugadores, pred, bt, meta):
         wsH.cell(r, 1, t)
         wsH.cell(r, 2, f"=C{r}+D{r}+E{r}")
         for j, val in enumerate((v, e, d), 3):
-            c = wsH.cell(r, j, val)
-            c.font = Font(name=ARIAL, color="0000FF")
+            wsH.cell(r, j, val)
         wsH.cell(r, 6, f"=3*C{r}+D{r}")
         wsH.cell(r, 7, f"=C{r}/B{r}").number_format = "0.0%"
-        c = wsH.cell(r, 8, pesos[i] if len(hist) == 10 else round(1 / len(hist), 3))
-        c.font = Font(name=ARIAL, color="0000FF")
-        c.number_format = "0.0%"
-    n = len(hist)
-    last = n + 1
-    wsH.cell(last + 1, 1, "Media / total").font = Font(name=ARIAL, bold=True)
-    wsH.cell(last + 1, 2, f"=SUM(B2:B{last})")
-    wsH.cell(last + 1, 3, f"=AVERAGE(C2:C{last})").number_format = "0.0"
-    wsH.cell(last + 1, 7, f"=SUM(C2:C{last})/SUM(B2:B{last})").number_format = "0.0%"
-    wsH.cell(last + 1, 8, f"=SUM(H2:H{last})").number_format = "0.0%"
-    wsH.cell(last + 2, 1, "Tasa de victoria ponderada").font = Font(name=ARIAL, bold=True)
-    wsH.cell(last + 2, 7, f"=SUMPRODUCT(G2:G{last},H2:H{last})").number_format = "0.0%"
+        wsH.cell(r, 8, pesos[i] if len(hist) == 10 else round(1 / len(hist), 3)).number_format = "0.0%"
     widths(wsH, [16, 8, 11, 10, 10, 9, 12, 16])
-    ch = BarChart()
-    ch.type = "col"
-    ch.title = "Victorias del Real Madrid en LaLiga por temporada"
-    ch.add_data(Reference(wsH, min_col=3, min_row=1, max_row=last), titles_from_data=True)
-    ch.set_categories(Reference(wsH, min_col=1, min_row=2, max_row=last))
-    ch.height, ch.width, ch.legend = 8, 16, None
-    wsH.add_chart(ch, "J2")
-    HROW = last + 2
 
     wsT = wb.create_sheet("Temporada_actual")
     hdr(wsT, 1, ["Jornada", "Fecha", "Rival", "Condición (L/V)", "GF", "GC", "Resultado (V/E/D)", "Nota"])
@@ -512,127 +551,6 @@ def write_workbook(path, hist, temporada, bajas, jugadores, pred, bt, meta):
                 wsT.cell(r, j, v)
         wsT.cell(r, 8, row[7] if len(row) > 7 else None)
     widths(wsT, [9, 12, 24, 16, 6, 6, 18, 40])
-
-    wsP = wb.create_sheet("Predicciones")
-    hdr(wsP, 1, ["Rival", "Condición", "Fecha", "P victoria", "P empate", "P derrota", "Goles esp. Madrid", "Goles esp. rival", "Elo rival"])
-    labels = ["P10 victorias finales", "P50 victorias finales", "P90 victorias finales", "Puntos esperados finales",
-              "Índice de bajas (L)", "Peso Poisson (w)", "Elo Real Madrid", "Actualizado"]
-    for i, t in enumerate(labels):
-        wsP.cell(1 + i, 11, t).font = Font(name=ARIAL, bold=True)
-    nlabels = ["Próximo partido", "Rival", "Condición", "Fecha", "P victoria", "P empate", "P derrota"]
-    for i, t in enumerate(nlabels):
-        wsP.cell(1 + i, 14, t).font = Font(name=ARIAL, bold=True)
-    if pred is not None:
-        for i, r in enumerate(pred["rows"]):
-            rr = i + 2
-            wsP.cell(rr, 1, r["rival"])
-            wsP.cell(rr, 2, "L" if r["home"] else "V")
-            if r["fecha"] is not None and pd.notna(r["fecha"]):
-                try:
-                    wsP.cell(rr, 3, r["fecha"].to_pydatetime()).number_format = "dd/mm/yyyy"
-                except Exception:
-                    wsP.cell(rr, 3, str(r["fecha"]))
-            for j in range(3):
-                wsP.cell(rr, 4 + j, round(float(r["p"][j]), 4)).number_format = "0.0%"
-            wsP.cell(rr, 7, round(float(r["gm"]), 2))
-            wsP.cell(rr, 8, round(float(r["gr"]), 2))
-            wsP.cell(rr, 9, round(float(r["elo"]), 0))
-        for i, v in enumerate(pred["resumen"]):
-            c = wsP.cell(1 + i, 12, v)
-            if i in (3, 4, 5, 6):
-                c.number_format = "0.00"
-        nx = pred.get("proximo")
-        if nx:
-            wsP.cell(2, 15, nx["rival"])
-            wsP.cell(3, 15, "L" if nx["home"] else "V")
-            if nx["fecha"] is not None and pd.notna(nx["fecha"]):
-                try:
-                    wsP.cell(4, 15, nx["fecha"].to_pydatetime()).number_format = "dd/mm/yyyy"
-                except Exception:
-                    wsP.cell(4, 15, str(nx["fecha"]))
-            for j in range(3):
-                wsP.cell(5 + j, 15, round(float(nx["p"][j]), 4)).number_format = "0.0%"
-    widths(wsP, [24, 10, 12, 11, 11, 11, 16, 15, 10, 3, 26, 18, 3, 18, 22])
-
-    wsB = wb.create_sheet("Backtest")
-    hdr(wsB, 1, ["Modelo", "Precisión", "Brier", "LogLoss", "N partidos"])
-    names = [("Mixto Poisson+Elo", "mixto"), ("Solo Poisson", "poisson"), ("Solo Elo", "elo"), ("Base histórica constante", "base")]
-    for i, (nm, k) in enumerate(names):
-        wsB.cell(2 + i, 1, nm)
-        if bt:
-            s = bt[k]
-            wsB.cell(2 + i, 2, s["acc"]).number_format = "0.0%"
-            wsB.cell(2 + i, 3, s["brier"]).number_format = "0.000"
-            wsB.cell(2 + i, 4, s["ll"]).number_format = "0.000"
-            wsB.cell(2 + i, 5, s["n"])
-    widths(wsB, [28, 12, 10, 24, 10, 16, 12, 10])
-
-    wsX = wb.create_sheet("Bajas")
-    hdr(wsX, 1, ["Jugador", "Estado (Disponible/Duda/Baja/Sanción)", "Motivo", "Vuelta estimada", "Importancia (0-1)", "Fuente"])
-    for i, b in enumerate(bajas):
-        for j, v in enumerate(b[:6], 1):
-            c = wsX.cell(i + 2, j, v)
-            if j in (2, 5):
-                c.font = Font(name=ARIAL, color="0000FF")
-                c.fill = INPUT
-    widths(wsX, [24, 22, 52, 16, 16, 40])
-
-    wsJ = wb.create_sheet("Jugadores")
-    hdr(wsJ, 1, ["Jugador", "Minutos", "Partidos", "Valoración media", "Goles", "Asistencias", "G+A por 90'"])
-    if jugadores:
-        for i, j in enumerate(sorted(jugadores, key=lambda x: -x[1])):
-            r = i + 2
-            for k, v in enumerate(j, 1):
-                wsJ.cell(r, k, v)
-            wsJ.cell(r, 7, f"=IF(B{r}>0,(E{r}+F{r})/B{r}*90,0)").number_format = "0.00"
-    widths(wsJ, [26, 10, 10, 16, 8, 12, 12])
-
-    wsR = wb.create_sheet("Parametros")
-    wsR.cell(1, 1, "Parámetro").font = Font(name=ARIAL, bold=True)
-    wsR.cell(1, 2, "Valor").font = Font(name=ARIAL, bold=True)
-    wsR.cell(1, 3, "Notas").font = Font(name=ARIAL, bold=True)
-    params = [
-        ("Fuerza del prior histórico (partidos equivalentes)", 10, "Solo para la estimación simple del Dashboard", True),
-        ("Ventaja de campo Elo", HFA, "Fijo en update.py", False),
-        ("K de Elo", ELO_K, "Fijo en update.py", False),
-        ("Semivida de los partidos (días)", HALF_LIFE, "Fijo en update.py", False),
-        ("Sensibilidad a bajas (K)", BAJAS_K, "SIN CALIBRAR", False),
-    ]
-    for i, (a, b, c, inp) in enumerate(params):
-        wsR.cell(2 + i, 1, a)
-        cc = wsR.cell(2 + i, 2, b)
-        if inp:
-            cc.font = Font(name=ARIAL, color="0000FF")
-            cc.fill = INPUT
-        wsR.cell(2 + i, 3, c)
-    widths(wsR, [50, 12, 60])
-
-    ws = wb.create_sheet("Dashboard", 0)
-    ws["A1"] = "Predictor Real Madrid - LaLiga"
-    ws["A1"].font = Font(name=ARIAL, size=16, bold=True, color="1F3864")
-    ws["A2"] = meta["estado"]
-    ws["A2"].font = Font(name=ARIAL, italic=True, size=9)
-    rows = [
-        (4, "TEMPORADA ACTUAL", None, None),
-        (5, "Partidos jugados", "=COUNTA(Temporada_actual!G2:G39)", "0"),
-        (6, "Victorias", '=COUNTIF(Temporada_actual!G2:G39,"V")', "0"),
-        (7, "Empates", '=COUNTIF(Temporada_actual!G2:G39,"E")', "0"),
-        (8, "Derrotas", '=COUNTIF(Temporada_actual!G2:G39,"D")', "0"),
-        (9, "Puntos", "=3*B6+B7", "0"),
-        (10, "% victorias", "=IF(B5>0,B6/B5,0)", "0.0%"),
-    ]
-    for r, lab, f, fmt in rows:
-        a = ws.cell(r, 1, lab)
-        if f is None:
-            a.font = Font(name=ARIAL, bold=True, color="FFFFFF")
-            a.fill = HEAD
-            ws.cell(r, 2).fill = HEAD
-        else:
-            c = ws.cell(r, 2, f)
-            c.alignment = Alignment(horizontal="right")
-            if fmt:
-                c.number_format = fmt
-    widths(ws, [52, 30])
     wb.save(path)
 
 import html as _html
@@ -653,7 +571,7 @@ def _pct(x):
 
 def write_site(site_dir, ctx):
     e = _html.escape
-    hist, temporada, pred, bt, bajas, meta = (ctx[k] for k in ("hist", "temporada", "pred", "bt", "bajas", "meta"))
+    hist, temporada, pred, bt, bajas, meta, standings = (ctx[k] for k in ("hist", "temporada", "pred", "bt", "bajas", "meta", "standings"))
     res = [r[6] for r in temporada if r[6]]
     pj, v, em, d = len(res), res.count("V"), res.count("E"), res.count("D")
     pts = 3 * v + em
@@ -676,9 +594,9 @@ def write_site(site_dir, ctx):
 
     nx = pred.get("proximo") if pred else None
     if nx:
-        nxt = (nx["rival"], "local" if nx["home"] else "visitante", _fmt_date(nx["fecha"]), nx["p"])
+        nxt = (nx["rival"], "local" if nx["home"] else "visitante", _fmt_date(nx["fecha"]), nx["p"], nx.get("top_scores", []))
     else:
-        nxt = (meta["next_rival"], "visitante" if meta["next_cond"] == "V" else "local" if meta["next_cond"] else "—", "—", None)
+        nxt = (meta["next_rival"], "visitante" if meta["next_cond"] == "V" else "local" if meta["next_cond"] else "—", "—", None, [])
 
     def prob_bar(pp):
         if not pp:
@@ -689,17 +607,30 @@ def write_site(site_dir, ctx):
                 f"<span class='l' style='width:{100*pp[2]:.1f}%'>{_pct(pp[2])}</span></div>"
                 "<p class='muted'>Victoria · Empate · Derrota</p>")
 
-    played = "".join(
-        f"<tr><td>{r[0]}</td><td>{_fmt_date(r[1])}</td><td>{e(str(r[2]))}</td><td>{e(str(r[3] or '—'))}</td>"
-        f"<td>{'—' if r[4] is None else f'{r[4]}-{r[5]}'}</td><td class='r{r[6]}'>{r[6]}</td></tr>" for r in temporada if r[6])
+    def format_top_scores(scores):
+        if not scores:
+            return ""
+        items = [f"<b>{h}-{a}</b> ({p*100:.1f}%)" for h, a, p in scores]
+        return "<div class='top-scores'>Marcadores más probables: " + " · ".join(items) + "</div>"
+
     future = ""
     if pred:
-        future = "".join(
-            f"<tr><td>{e(r['rival'])}</td><td>{'L' if r['home'] else 'V'}</td><td>{_fmt_date(r['fecha'])}</td>"
-            f"<td>{_pct(r['p'][0])}</td><td>{_pct(r['p'][1])}</td><td>{_pct(r['p'][2])}</td></tr>" for r in pred["rows"])
+        for r in pred["rows"]:
+            scores_str = ", ".join([f"{h}-{a}" for h, a, _ in r.get("top_scores", [])[:2]])
+            future += (f"<tr><td>{e(r['rival'])}</td><td>{'L' if r['home'] else 'V'}</td><td>{_fmt_date(r['fecha'])}</td>"
+                       f"<td>{_pct(r['p'][0])}</td><td>{_pct(r['p'][1])}</td><td>{_pct(r['p'][2])}</td>"
+                       f"<td><span class='score-tag'>{scores_str}</span></td></tr>")
+
     bj = "".join(
         f"<tr><td>{e(str(b[0]))}</td><td>{e(str(b[1]))}</td><td>{e(str(b[2]))}</td><td>{e(str(b[3]))}</td><td>{e(str(b[4]))}</td></tr>"
         for b in bajas if str(b[1]).strip().lower() in PESO_ESTADO)
+
+    # Tabla de clasificación
+    std_rows = ""
+    if standings:
+        for row in standings:
+            highlight = "class='madrid-row'" if row["Equipo"] == MADRID else ""
+            std_rows += f"<tr {highlight}><td><b>{row['Pos']}</b></td><td>{e(row['Equipo'])}</td><td>{row['PJ']}</td><td>{row['V']}</td><td>{row['E']}</td><td>{row['D']}</td><td>{row['GF']}</td><td>{row['GC']}</td><td>{row['DG']}</td><td><b>{row['Pts']}</b></td></tr>"
 
     page = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -714,6 +645,9 @@ main{{max-width:980px;margin:0 auto;padding:20px 16px 60px}}h1{{font-size:1.6rem
 .kpi{{font-size:1.8rem;font-weight:700}}table{{width:100%;border-collapse:collapse;font-size:.9rem}}th,td{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}}th{{color:var(--muted);font-weight:600}}
 .wrap{{overflow-x:auto}}.bar{{display:flex;height:30px;border-radius:8px;overflow:hidden;font-size:.8rem;color:#fff;font-weight:600}}.bar span{{display:flex;align-items:center;justify-content:center;min-width:0}}
 .bar .w{{background:var(--w)}}.bar .d{{background:var(--d)}}.bar .l{{background:var(--l)}}td.rV{{color:var(--w);font-weight:700}}td.rD{{color:var(--l);font-weight:700}}td.rE{{color:var(--d);font-weight:700}}
+.top-scores{{margin-top:10px;font-size:.9rem;background:var(--bg);padding:8px 12px;border-radius:6px;border:1px solid var(--line)}}
+.score-tag{{background:var(--bg);padding:2px 6px;border-radius:4px;font-weight:600;font-size:.8rem}}
+.madrid-row{{background:rgba(31,56,100,0.1);font-weight:bold}}
 </style></head><body><main>
 <h1>Predictor Real Madrid</h1>
 <p class="muted">{e(meta['estado'])}</p>
@@ -722,23 +656,39 @@ main{{max-width:980px;margin:0 auto;padding:20px 16px 60px}}h1{{font-size:1.6rem
 <div class="card"><div class="muted">Victorias finales previstas</div><div class="kpi">{total:.1f}</div><div class="muted">Rango P10–P90: {p10} – {p90} (central {p50})</div></div>
 <div class="card"><div class="muted">Victorias restantes esperadas</div><div class="kpi">{fut:.1f}</div><div class="muted">de {rem} partidos</div></div>
 </div>
-<div class="card"><h2>Próximo partido: {e(nxt[0])} ({nxt[1]}) · {nxt[2]}</h2>{prob_bar(nxt[3])}</div>
-<div class="card"><h2>Próximos encuentros en calendario</h2>{'<div class="wrap"><table><tr><th>Rival</th><th>L/V</th><th>Fecha</th><th>Victoria</th><th>Empate</th><th>Derrota</th></tr>'+future+'</table></div>' if future else "<p class='muted'>Se rellena tras la primera actualización con datos.</p>"}</div>
-<div class="card"><h2>Bajas y dudas</h2>{'<div class="wrap"><table><tr><th>Jugador</th><th>Estado</th><th>Motivo</th><th>Vuelta</th><th>Importancia</th></tr>'+bj+'</table></div>' if bj else "<p class='muted'>Sin bajas registradas en bajas.csv.</p>"}</div>
+
+<div class="card">
+<h2>Próximo partido: {e(nxt[0])} ({nxt[1]}) · {nxt[2]}</h2>
+{prob_bar(nxt[3])}
+{format_top_scores(nxt[4])}
+</div>
+
+<div class="card">
+<h2>Clasificación Actual de La Liga</h2>
+{'<div class="wrap"><table><tr><th>Pos</th><th>Equipo</th><th>PJ</th><th>V</th><th>E</th><th>D</th><th>GF</th><th>GC</th><th>DG</th><th>Pts</th></tr>'+std_rows+'</table></div>' if std_rows else "<p class='muted'>Clasificación disponible tras cargar los datos.</p>"}
+</div>
+
+<div class="card">
+<h2>Próximos encuentros y marcadores probables</h2>
+{'<div class="wrap"><table><tr><th>Rival</th><th>L/V</th><th>Fecha</th><th>Victoria</th><th>Empate</th><th>Derrota</th><th>Marcadores probables</th></tr>'+future+'</table></div>' if future else "<p class='muted'>Se rellena tras la primera actualización con datos.</p>"}
+</div>
+
+<div class="card">
+<h2>Bajas y dudas</h2>
+{'<div class="wrap"><table><tr><th>Jugador</th><th>Estado</th><th>Motivo</th><th>Vuelta</th><th>Importancia</th></tr>'+bj+'</table></div>' if bj else "<p class='muted'>Sin bajas registradas en bajas.csv.</p>"}
+</div>
 </main></body></html>"""
     (site_dir / "index.html").write_text(page, encoding="utf-8")
     data = {
         "actualizado": meta["estado"], "jugados": pj, "V": v, "E": em, "D": d, "puntos": pts,
         "victorias_finales_previstas": round(total, 2), "p10": int(p10), "p50": int(p50), "p90": int(p90),
-        "metodo": metodo,
         "proximo": {"rival": nxt[0], "condicion": nxt[1], "fecha": nxt[2],
-                    "p": [round(float(x), 4) for x in nxt[3]] if nxt[3] else None},
-        "restantes": [{"rival": r["rival"], "local": bool(r["home"]), "p": [round(float(x), 4) for x in r["p"]]}
-                      for r in (pred["rows"] if pred else [])],
+                    "p": [round(float(x), 4) for x in nxt[3]] if nxt[3] else None,
+                    "top_scores": nxt[4]}
     }
     (site_dir / "data.json").write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-LEEME = ["PREDICTOR REAL MADRID"]
+LEEME = ["PREDICTOR REAL MADRID v3"]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -760,11 +710,13 @@ def main():
     bajas, jugadores = api_football(today, bajas) if refresh else (bajas, [])
 
     hist, temporada, pred, bt = SEED_HIST, [list(x) + [None] for x in SEED_2627], None, None
+    standings = []
     meta = {"leeme": LEEME, "next_rival": "Valencia", "next_cond": "V", "next_date": "DATE(2026,11,7)",
             "estado": f"Actualizado el {today:%d/%m/%Y}."}
 
     if df is not None:
         df, ratings = run_elo(df)
+        standings = get_standings(df, cur)
         mm = madrid_matches(df)
         h = []
         for s in range(cur - N_HIST, cur):
@@ -801,7 +753,7 @@ def main():
 
     write_workbook(out, hist, temporada, bajas, jugadores, pred, bt, meta)
     if a.site:
-        write_site(out.parent, {"hist": hist, "temporada": temporada, "pred": pred, "bt": bt, "bajas": bajas, "meta": meta})
+        write_site(out.parent, {"hist": hist, "temporada": temporada, "pred": pred, "bt": bt, "bajas": bajas, "meta": meta, "standings": standings})
     print("Listo:", out)
 
 if __name__ == "__main__":
