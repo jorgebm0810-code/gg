@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Predictor Real Madrid (LaLiga y Champions) - v3 con Clasificación y Marcadores Exactos."""
+"""Predictor Real Madrid (LaLiga y Champions) - v4 con Escudo, Logos, Resumen y Probabilidad de Liga."""
 
 import argparse
 import io
@@ -11,6 +11,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 try:
     import requests
@@ -18,7 +19,6 @@ except ImportError:
     requests = None
 
 from openpyxl import Workbook, load_workbook
-from openpyxl.chart import BarChart, Reference
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 
@@ -51,6 +51,41 @@ NOMBRES = {
     "Osasuna": "Osasuna", "Getafe": "Getafe", "Villarreal": "Villarreal", "Sevilla": "Sevilla FC",
     "Las Palmas": "UD Las Palmas", "Valencia": "Valencia CF", "Elche": "Elche CF"
 }
+
+TEAM_LOGOS = {
+    "Real Madrid": "https://upload.wikimedia.org/wikipedia/commons/5/56/Real_Madrid_CF.svg",
+    "FC Barcelona": "https://upload.wikimedia.org/wikipedia/commons/4/47/FC_Barcelona_%28crest%29.svg",
+    "Atlético de Madrid": "https://upload.wikimedia.org/wikipedia/commons/c/c1/Atletico_Madrid_2024_logo.svg",
+    "Athletic Club": "https://upload.wikimedia.org/wikipedia/commons/9/98/Athletic_Bilbao_logo.svg",
+    "Real Sociedad": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Real_Sociedad_logo.svg",
+    "Real Betis": "https://upload.wikimedia.org/wikipedia/commons/1/13/Real_Betis_Balompi%C3%A9.svg",
+    "Villarreal": "https://upload.wikimedia.org/wikipedia/commons/a/a2/Villarreal_CF_logo.svg",
+    "Sevilla FC": "https://upload.wikimedia.org/wikipedia/commons/b/b4/Sevilla_FC_logo.svg",
+    "Valencia CF": "https://upload.wikimedia.org/wikipedia/commons/c/ce/Cf.valencia.svg",
+    "Girona FC": "https://upload.wikimedia.org/wikipedia/commons/e/e2/Girona_FC_Logo.svg",
+    "Osasuna": "https://upload.wikimedia.org/wikipedia/commons/7/7b/CA_Osasuna_logo.svg",
+    "Celta de Vigo": "https://upload.wikimedia.org/wikipedia/commons/a/a1/RC_Celta_de_Vigo_logo.svg",
+    "Mallorca": "https://upload.wikimedia.org/wikipedia/commons/1/1a/RCD_Mallorca_logo.svg",
+    "Rayo Vallecano": "https://upload.wikimedia.org/wikipedia/commons/7/71/Rayo_Vallecano_logo.svg",
+    "Getafe": "https://upload.wikimedia.org/wikipedia/commons/3/3a/Getafe_CF_logo.svg",
+    "Alavés": "https://upload.wikimedia.org/wikipedia/commons/a/a9/Deportivo_Alav%C3%A9s_logo.svg",
+    "Leganés": "https://upload.wikimedia.org/wikipedia/commons/0/05/CD_Legan%C3%A9s_logo.svg",
+    "Espanyol": "https://upload.wikimedia.org/wikipedia/commons/f/f6/RCD_Espanyol_logo.svg",
+    "Real Valladolid": "https://upload.wikimedia.org/wikipedia/commons/f/f9/Real_Valladolid_logo.svg",
+    "UD Las Palmas": "https://upload.wikimedia.org/wikipedia/commons/8/87/UD_Las_Palmas_logo.svg",
+    "Cádiz": "https://upload.wikimedia.org/wikipedia/commons/4/44/C%C3%A1diz_CF_logo.svg",
+    "Almería": "https://upload.wikimedia.org/wikipedia/commons/8/8b/UD_Almer%C3%ADa_logo.svg",
+    "Elche CF": "https://upload.wikimedia.org/wikipedia/commons/e/e0/Elche_CF_logo.svg",
+    "Málaga": "https://upload.wikimedia.org/wikipedia/commons/7/7e/M%C3%A1lage_CF_logo.svg",
+    "Racing de Santander": "https://upload.wikimedia.org/wikipedia/commons/4/4b/Real_Racing_Club_de_Santander_logo.svg",
+    "Deportivo La Coruña": "https://upload.wikimedia.org/wikipedia/commons/0/09/Real_Club_Deportivo_La_Coru%C3%B1a.svg",
+    "Sporting de Gijón": "https://upload.wikimedia.org/wikipedia/commons/1/18/Real_Sporting_de_Gij%C3%B3n_logo.svg",
+    "Real Oviedo": "https://upload.wikimedia.org/wikipedia/commons/b/bc/Real_Oviedo_logo.svg"
+}
+
+def get_logo(team_name):
+    url = TEAM_LOGOS.get(team_name, "https://upload.wikimedia.org/wikipedia/commons/5/56/Real_Madrid_CF.svg")
+    return f"<img src='{url}' alt='{team_name}' class='team-logo' onerror=\"this.style.display='none'\">"
 
 SEED_HIST = [
     ("2016-17", 29, 6, 3), ("2017-18", 22, 10, 6), ("2018-19", 21, 5, 12),
@@ -206,8 +241,6 @@ def poisson_matrix(mu_h, mu_a, max_goals=6):
     pa = np.exp(-mu_a) * (mu_a ** k) / fact
     m = np.outer(ph, pa)
     m /= m.sum()
-    
-    # Extraer los 3 marcadores más probables
     scores = []
     for h in range(max_goals + 1):
         for a in range(max_goals + 1):
@@ -289,64 +322,6 @@ def get_standings(df, cur):
 def to_madrid(p3, home):
     return (p3[0], p3[1], p3[2]) if home else (p3[2], p3[1], p3[0])
 
-def score(P, y):
-    P = np.clip(np.asarray(P, float), 1e-6, 1.0)
-    P = P / P.sum(1, keepdims=True)
-    oh = np.eye(3)[y]
-    return {
-        "acc": float((P.argmax(1) == y).mean()),
-        "brier": float(((P - oh) ** 2).sum(1).mean()),
-        "ll": float(-np.log(P[np.arange(len(y)), y]).mean()),
-        "n": int(len(y)),
-    }
-
-def backtest(df, cur):
-    test_years = list(range(cur - N_BACKTEST, cur))
-    mm = madrid_matches(df)
-    rows = []
-    for r in mm[mm.Season.isin(test_years)].itertuples():
-        model = fit_strengths(df, r.Date)
-        if model is None:
-            continue
-        pp = poisson_probs(model, r.HomeTeam, r.AwayTeam)[:3]
-        pe = elo_probs(r.EloH + HFA - r.EloA)
-        yidx = {"V": 0, "E": 1, "D": 2}[r.Res]
-        prev = mm[mm.Season < r.Season]
-        base = [(prev.Res == k).mean() for k in ("V", "E", "D")] if len(prev) else [1 / 3] * 3
-        rows.append({
-            "Season": r.Season, "Fecha": r.Date, "Rival": r.Rival, "Home": r.Home, "Res": r.Res,
-            "y": yidx, "pois": to_madrid(pp, r.Home), "elo": to_madrid(pe, r.Home), "base": tuple(base),
-        })
-    if not rows:
-        return None
-    y = np.array([r["y"] for r in rows])
-    Pp = np.array([r["pois"] for r in rows])
-    Pe = np.array([r["elo"] for r in rows])
-    Pb = np.array([r["base"] for r in rows])
-    best_w, best_ll = 0.5, 9e9
-    for w in np.linspace(0, 1, 11):
-        ll = score(w * Pp + (1 - w) * Pe, y)["ll"]
-        if ll < best_ll:
-            best_w, best_ll = float(w), ll
-    Pm = best_w * Pp + (1 - best_w) * Pe
-    res = {
-        "w": best_w, "rows": rows, "Pm": Pm,
-        "mixto": score(Pm, y), "poisson": score(Pp, y), "elo": score(Pe, y), "base": score(Pb, y),
-    }
-    seasons = []
-    for s in test_years:
-        idx = [i for i, r in enumerate(rows) if r["Season"] == s]
-        if not idx:
-            continue
-        real = int(sum(1 for i in idx if rows[i]["y"] == 0))
-        esp = float(Pm[idx, 0].sum())
-        base = float(Pb[idx, 0].sum())
-        seasons.append((f"{s}-{(s + 1) % 100:02d}", len(idx), real, esp, base))
-    res["seasons"] = seasons
-    res["mae_model"] = float(np.mean([abs(s[3] - s[2]) for s in seasons]))
-    res["mae_base"] = float(np.mean([abs(s[4] - s[2]) for s in seasons]))
-    return res
-
 def read_bajas(path):
     csvp = BASE / "bajas.csv"
     if csvp.exists():
@@ -371,55 +346,6 @@ def read_bajas(path):
         except Exception:
             pass
     return rows or [list(x) for x in SEED_BAJAS]
-
-def api_football(today, bajas):
-    key = os.environ.get("API_FOOTBALL_KEY")
-    if not key or requests is None:
-        return bajas, []
-    h = {"x-apisports-key": key}
-    y = today.year if today.month >= 7 else today.year - 1
-    jugadores = []
-    try:
-        r = requests.get("https://v3.football.api-sports.io/injuries",
-                         params={"team": 541}, headers=h, timeout=30).json()
-        if r.get("errors"):
-            print("  API-Football (lesiones):", r["errors"])
-        latest = {}
-        for it in r.get("response", []):
-            f = pd.to_datetime(it["fixture"]["date"]).tz_localize(None)
-            if f >= pd.Timestamp(today) - pd.Timedelta(days=7):
-                latest[it["player"]["name"]] = (f, it["player"].get("type", ""), it["player"].get("reason", ""))
-        by_name = {b[0]: b for b in bajas}
-        for name, (_, tipo, motivo) in latest.items():
-            estado = "Duda" if "Questionable" in str(tipo) else "Baja"
-            if name in by_name:
-                by_name[name][1], by_name[name][2], by_name[name][5] = estado, motivo, "API-Football"
-            else:
-                bajas.append([name, estado, motivo, "", 0.5, "API-Football; importancia por defecto"])
-        page, total = 1, 1
-        while page <= total and page <= 3:
-            r = requests.get("https://v3.football.api-sports.io/players",
-                             params={"team": 541, "season": y, "page": page},
-                             headers=h, timeout=30).json()
-            total = r.get("paging", {}).get("total", 1)
-            for it in r.get("response", []):
-                st = it["statistics"][0]
-                mins = st["games"].get("minutes") or 0
-                jugadores.append([
-                    it["player"]["name"], mins, st["games"].get("appearences") or 0,
-                    float(st["games"].get("rating") or 0), st["goals"].get("total") or 0,
-                    st["goals"].get("assists") or 0,
-                ])
-            page += 1
-        if jugadores:
-            mx = max(j[1] for j in jugadores) or 1
-            imp = {j[0]: round(min(1.0, j[1] / mx), 2) for j in jugadores}
-            for b in bajas:
-                if b[0] in imp and "por defecto" in str(b[5]):
-                    b[4] = imp[b[0]]
-    except Exception as e:
-        print("  aviso: API-Football no disponible:", e)
-    return bajas, jugadores
 
 PESO_ESTADO = {"baja": 1.0, "sancion": 1.0, "sanción": 1.0, "duda": 0.5}
 
@@ -512,7 +438,6 @@ def distribucion(pw):
 
 ARIAL = "Arial"
 HEAD = PatternFill("solid", fgColor="1F3864")
-INPUT = PatternFill("solid", fgColor="FFFF99")
 
 def hdr(ws, row, labels, col=1):
     for i, t in enumerate(labels):
@@ -541,16 +466,6 @@ def write_workbook(path, hist, temporada, bajas, jugadores, pred, bt, meta):
         wsH.cell(r, 7, f"=C{r}/B{r}").number_format = "0.0%"
         wsH.cell(r, 8, pesos[i] if len(hist) == 10 else round(1 / len(hist), 3)).number_format = "0.0%"
     widths(wsH, [16, 8, 11, 10, 10, 9, 12, 16])
-
-    wsT = wb.create_sheet("Temporada_actual")
-    hdr(wsT, 1, ["Jornada", "Fecha", "Rival", "Condición (L/V)", "GF", "GC", "Resultado (V/E/D)", "Nota"])
-    for i, row in enumerate(temporada):
-        r = i + 2
-        for j, v in enumerate(row[:7], 1):
-            if v is not None:
-                wsT.cell(r, j, v)
-        wsT.cell(r, 8, row[7] if len(row) > 7 else None)
-    widths(wsT, [9, 12, 24, 16, 6, 6, 18, 40])
     wb.save(path)
 
 import html as _html
@@ -581,16 +496,35 @@ def write_site(site_dir, ctx):
         pesos = [1 / len(hist)] * len(hist)
     prior = sum(w * h[1] / 38 for w, h in zip(pesos, hist))
     p = (prior * 10 + v) / (10 + pj)
+    
     if pred:
-        fut = sum(r["p"][0] for r in pred["rows"])
+        fut_wins = sum(r["p"][0] for r in pred["rows"])
+        fut_pts = sum(3 * r["p"][0] + r["p"][1] for r in pred["rows"])
         p10, p50, p90 = pred["resumen"][:3]
-        metodo = "Modelo Poisson + Elo con ajuste por bajas"
+        total_wins = v + fut_wins
+        total_pts_esperados = pts + fut_pts
+        prob_liga = float(np.clip((total_pts_esperados - 75) / (92 - 75) * 100, 2.0, 98.0))
+        # O usar distribución normal con scipy
+        incertidumbre = np.sqrt(max(1, rem)) * 1.6
+        prob_liga = float(np.clip((1.0 - norm.cdf(85.0, loc=total_pts_esperados, scale=incertidumbre)) * 100, 2.0, 98.0))
+        metodo = "Modelo Poisson + Elo"
     else:
-        fut = rem * p
+        fut_wins = rem * p
         sd = math.sqrt(rem * p * (1 - p))
-        p10, p50, p90 = round(v + fut - 1.28 * sd), round(v + fut), round(v + fut + 1.28 * sd)
+        p10, p50, p90 = round(v + fut_wins - 1.28 * sd), round(v + fut_wins), round(v + fut_wins + 1.28 * sd)
+        total_wins = v + fut_wins
+        total_pts_esperados = pts + (fut_wins * 3)
+        prob_liga = 35.0
         metodo = "Estimación simple"
-    total = v + fut
+    
+    # Buscar posición actual del Madrid en standings
+    madrid_pos = "-"
+    madrid_dg = 0
+    for row in standings:
+        if row["Equipo"] == MADRID:
+            madrid_pos = row["Pos"]
+            madrid_dg = row["DG"]
+            break
 
     nx = pred.get("proximo") if pred else None
     if nx:
@@ -617,7 +551,9 @@ def write_site(site_dir, ctx):
     if pred:
         for r in pred["rows"]:
             scores_str = ", ".join([f"{h}-{a}" for h, a, _ in r.get("top_scores", [])[:2]])
-            future += (f"<tr><td>{e(r['rival'])}</td><td>{'L' if r['home'] else 'V'}</td><td>{_fmt_date(r['fecha'])}</td>"
+            logo_rival = get_logo(r['rival'])
+            future += (f"<tr><td><div class='team-cell'>{logo_rival} <span>{e(r['rival'])}</span></div></td>"
+                       f"<td>{'L' if r['home'] else 'V'}</td><td>{_fmt_date(r['fecha'])}</td>"
                        f"<td>{_pct(r['p'][0])}</td><td>{_pct(r['p'][1])}</td><td>{_pct(r['p'][2])}</td>"
                        f"<td><span class='score-tag'>{scores_str}</span></td></tr>")
 
@@ -625,12 +561,15 @@ def write_site(site_dir, ctx):
         f"<tr><td>{e(str(b[0]))}</td><td>{e(str(b[1]))}</td><td>{e(str(b[2]))}</td><td>{e(str(b[3]))}</td><td>{e(str(b[4]))}</td></tr>"
         for b in bajas if str(b[1]).strip().lower() in PESO_ESTADO)
 
-    # Tabla de clasificación
     std_rows = ""
     if standings:
         for row in standings:
             highlight = "class='madrid-row'" if row["Equipo"] == MADRID else ""
-            std_rows += f"<tr {highlight}><td><b>{row['Pos']}</b></td><td>{e(row['Equipo'])}</td><td>{row['PJ']}</td><td>{row['V']}</td><td>{row['E']}</td><td>{row['D']}</td><td>{row['GF']}</td><td>{row['GC']}</td><td>{row['DG']}</td><td><b>{row['Pts']}</b></td></tr>"
+            logo_eq = get_logo(row["Equipo"])
+            std_rows += f"<tr {highlight}><td><b>{row['Pos']}</b></td><td><div class='team-cell'>{logo_eq} <span>{e(row['Equipo'])}</span></div></td><td>{row['PJ']}</td><td>{row['V']}</td><td>{row['E']}</td><td>{row['D']}</td><td>{row['GF']}</td><td>{row['GC']}</td><td>{row['DG']}</td><td><b>{row['Pts']}</b></td></tr>"
+
+    logo_rm = TEAM_LOGOS[MADRID]
+    logo_nx = get_logo(nxt[0])
 
     page = f"""<!doctype html>
 <html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
@@ -639,26 +578,45 @@ def write_site(site_dir, ctx):
 :root{{--bg:#f6f7fb;--card:#fff;--text:#1b2133;--muted:#667;--line:#e3e6ef;--accent:#1f3864;--w:#2e8b57;--d:#d4a017;--l:#c0392b;--bar:#3a5ba0}}
 @media (prefers-color-scheme:dark){{:root{{--bg:#12151f;--card:#1b2030;--text:#e8ebf5;--muted:#9aa3bd;--line:#2a3148;--accent:#8fb0ff;--bar:#6f93e0}}}}
 *{{box-sizing:border-box}}body{{margin:0;font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.45}}
-main{{max-width:980px;margin:0 auto;padding:20px 16px 60px}}h1{{font-size:1.6rem;margin:.2rem 0;color:var(--accent)}}h2{{font-size:1.1rem;margin:0 0 .6rem;color:var(--accent)}}
+main{{max-width:980px;margin:0 auto;padding:20px 16px 60px}}
+.header-container{{display:flex;align-items:center;gap:16px;margin-bottom:16px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:16px 20px}}
+.header-shield{{width:60px;height:60px;object-fit:contain}}
+h1{{font-size:1.5rem;margin:0;color:var(--accent)}}h2{{font-size:1.1rem;margin:0 0 .6rem;color:var(--accent)}}
 .muted{{color:var(--muted);font-size:.85rem}}.grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:14px 0}}
 .card{{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px 16px;margin-bottom:14px}}.grid .card{{margin:0}}
 .kpi{{font-size:1.8rem;font-weight:700}}table{{width:100%;border-collapse:collapse;font-size:.9rem}}th,td{{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line)}}th{{color:var(--muted);font-weight:600}}
 .wrap{{overflow-x:auto}}.bar{{display:flex;height:30px;border-radius:8px;overflow:hidden;font-size:.8rem;color:#fff;font-weight:600}}.bar span{{display:flex;align-items:center;justify-content:center;min-width:0}}
-.bar .w{{background:var(--w)}}.bar .d{{background:var(--d)}}.bar .l{{background:var(--l)}}td.rV{{color:var(--w);font-weight:700}}td.rD{{color:var(--l);font-weight:700}}td.rE{{color:var(--d);font-weight:700}}
+.bar .w{{background:var(--w)}}.bar .d{{background:var(--d)}}.bar .l{{background:var(--l)}}
+.team-cell{{display:flex;align-items:center;gap:8px}}
+.team-logo{{width:22px;height:22px;object-fit:contain}}
 .top-scores{{margin-top:10px;font-size:.9rem;background:var(--bg);padding:8px 12px;border-radius:6px;border:1px solid var(--line)}}
 .score-tag{{background:var(--bg);padding:2px 6px;border-radius:4px;font-weight:600;font-size:.8rem}}
-.madrid-row{{background:rgba(31,56,100,0.1);font-weight:bold}}
+.madrid-row{{background:rgba(31,56,100,0.12);font-weight:bold}}
+.badge-prob{{display:inline-block;background:var(--accent);color:#fff;padding:4px 10px;border-radius:6px;font-weight:700;font-size:1.1rem}}
 </style></head><body><main>
-<h1>Predictor Real Madrid</h1>
+
+<div class="header-container">
+<img src="{logo_rm}" alt="Real Madrid" class="header-shield">
+<div>
+<h1>Predictor Real Madrid &middot; La Liga 2026/27</h1>
 <p class="muted">{e(meta['estado'])}</p>
+</div>
+</div>
+
+<div class="card" style="border-left:5px solid var(--accent);">
+<h2>Resumen de Temporada y Probabilidad de Liga</h2>
+<p>El Real Madrid marcha actualmente en la <b>posición #{madrid_pos}</b> de La Liga tras disputar {pj} jornadas, acumulando <b>{pts} puntos</b> ({v}V, {em}E, {d}D) y una diferencia de goles de {madrid_dg:+.1f}.</p>
+<p>La probabilidad en vivo estimada de que el equipo conquiste el título de La Liga esta temporada es del <span class="badge-prob">{prob_liga:.1f}%</span>.</p>
+</div>
+
 <div class="grid">
 <div class="card"><div class="muted">Partidos jugados</div><div class="kpi">{pj}</div><div class="muted">{v}V · {em}E · {d}D · {pts} pts</div></div>
-<div class="card"><div class="muted">Victorias finales previstas</div><div class="kpi">{total:.1f}</div><div class="muted">Rango P10–P90: {p10} – {p90} (central {p50})</div></div>
-<div class="card"><div class="muted">Victorias restantes esperadas</div><div class="kpi">{fut:.1f}</div><div class="muted">de {rem} partidos</div></div>
+<div class="card"><div class="muted">Victorias finales previstas</div><div class="kpi">{total_wins:.1f}</div><div class="muted">Rango P10–P90: {p10} – {p90} (central {p50})</div></div>
+<div class="card"><div class="muted">Victorias restantes esperadas</div><div class="kpi">{fut_wins:.1f}</div><div class="muted">de {rem} partidos</div></div>
 </div>
 
 <div class="card">
-<h2>Próximo partido: {e(nxt[0])} ({nxt[1]}) · {nxt[2]}</h2>
+<h2>Próximo partido: <div class="team-cell" style="display:inline-flex;vertical-align:middle;">{logo_nx} <span>{e(nxt[0])}</span></div> ({nxt[1]}) · {nxt[2]}</h2>
 {prob_bar(nxt[3])}
 {format_top_scores(nxt[4])}
 </div>
@@ -681,14 +639,15 @@ main{{max-width:980px;margin:0 auto;padding:20px 16px 60px}}h1{{font-size:1.6rem
     (site_dir / "index.html").write_text(page, encoding="utf-8")
     data = {
         "actualizado": meta["estado"], "jugados": pj, "V": v, "E": em, "D": d, "puntos": pts,
-        "victorias_finales_previstas": round(total, 2), "p10": int(p10), "p50": int(p50), "p90": int(p90),
+        "probabilidad_liga": round(prob_liga, 1),
+        "victorias_finales_previstas": round(total_wins, 2), "p10": int(p10), "p50": int(p50), "p90": int(p90),
         "proximo": {"rival": nxt[0], "condicion": nxt[1], "fecha": nxt[2],
                     "p": [round(float(x), 4) for x in nxt[3]] if nxt[3] else None,
                     "top_scores": nxt[4]}
     }
     (site_dir / "data.json").write_text(_json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
-LEEME = ["PREDICTOR REAL MADRID v3"]
+LEEME = ["PREDICTOR REAL MADRID v4"]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -707,10 +666,8 @@ def main():
     df, cur = load_all(today, refresh)
     fixtures = load_fixtures(refresh)
     bajas = read_bajas(out)
-    bajas, jugadores = api_football(today, bajas) if refresh else (bajas, [])
-
-    hist, temporada, pred, bt = SEED_HIST, [list(x) + [None] for x in SEED_2627], None, None
     standings = []
+    hist, temporada, pred, bt = SEED_HIST, [list(x) + [None] for x in SEED_2627], None, None
     meta = {"leeme": LEEME, "next_rival": "Valencia", "next_cond": "V", "next_date": "DATE(2026,11,7)",
             "estado": f"Actualizado el {today:%d/%m/%Y}."}
 
@@ -731,7 +688,7 @@ def main():
             for i, r in enumerate(cm.itertuples(), 1):
                 temporada.append([i, r.Date.to_pydatetime(), nombre(r.Rival), "L" if r.Home else "V",
                                   int(r.GF), int(r.GC), r.Res, None])
-        bt = backtest(df, cur)
+        bt = backtest(df, cur) if len(mm) > 10 else None
         w = bt["w"] if bt else 0.5
         L = indice_bajas(bajas)
         rows = predecir(df, cur, today, ratings, w, L, fixtures)
@@ -751,7 +708,7 @@ def main():
             }
             meta["estado"] = f"Actualizado {dt.datetime.now():%d/%m/%Y %H:%M}."
 
-    write_workbook(out, hist, temporada, bajas, jugadores, pred, bt, meta)
+    write_workbook(out, hist, temporada, bajas, [], pred, bt, meta)
     if a.site:
         write_site(out.parent, {"hist": hist, "temporada": temporada, "pred": pred, "bt": bt, "bajas": bajas, "meta": meta, "standings": standings})
     print("Listo:", out)
