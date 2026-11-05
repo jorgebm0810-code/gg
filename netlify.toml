@@ -6,4 +6,3 @@
 
 [build.environment]
   PYTHON_VERSION = "3.12"
-  # Opcional (panel de Netlify > Environment variables): API_FOOTBALL_KEY, BUILD_HOOK_URL
