@@ -85,7 +85,7 @@ TEAM_LOGOS = {
 
 def get_logo(team_name):
     url = TEAM_LOGOS.get(team_name, "https://upload.wikimedia.org/wikipedia/commons/5/56/Real_Madrid_CF.svg")
-    return f"<img src='{url}' alt='{team_name}' class='team-logo' onerror="this.style.display='none'">"
+    return f"<img src='{url}' alt='{team_name}' class='team-logo' onerror=\"this.style.display='none'\">"
 
 SEED_HIST = [
     ("2016-17", 29, 6, 3), ("2017-18", 22, 10, 6), ("2018-19", 21, 5, 12),
