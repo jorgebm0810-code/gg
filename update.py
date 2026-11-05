@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Predictor Real Madrid (LaLiga y Champions) - v4 con Escudo, Logos, Resumen y Probabilidad de Liga."""
+"""Predictor Real Madrid (LaLiga y Champions) - v4 Corregido."""
 
 import argparse
 import io
@@ -85,7 +85,7 @@ TEAM_LOGOS = {
 
 def get_logo(team_name):
     url = TEAM_LOGOS.get(team_name, "https://upload.wikimedia.org/wikipedia/commons/5/56/Real_Madrid_CF.svg")
-    return f"<img src='{url}' alt='{team_name}' class='team-logo' onerror=\"this.style.display='none'\">"
+    return f"<img src='{url}' alt='{team_name}' class='team-logo' onerror="this.style.display='none'">"
 
 SEED_HIST = [
     ("2016-17", 29, 6, 3), ("2017-18", 22, 10, 6), ("2018-19", 21, 5, 12),
@@ -322,6 +322,64 @@ def get_standings(df, cur):
 def to_madrid(p3, home):
     return (p3[0], p3[1], p3[2]) if home else (p3[2], p3[1], p3[0])
 
+def score(P, y):
+    P = np.clip(np.asarray(P, float), 1e-6, 1.0)
+    P = P / P.sum(1, keepdims=True)
+    oh = np.eye(3)[y]
+    return {
+        "acc": float((P.argmax(1) == y).mean()),
+        "brier": float(((P - oh) ** 2).sum(1).mean()),
+        "ll": float(-np.log(P[np.arange(len(y)), y]).mean()),
+        "n": int(len(y)),
+    }
+
+def backtest(df, cur):
+    test_years = list(range(cur - N_BACKTEST, cur))
+    mm = madrid_matches(df)
+    rows = []
+    for r in mm[mm.Season.isin(test_years)].itertuples():
+        model = fit_strengths(df, r.Date)
+        if model is None:
+            continue
+        pp = poisson_probs(model, r.HomeTeam, r.AwayTeam)[:3]
+        pe = elo_probs(r.EloH + HFA - r.EloA)
+        yidx = {"V": 0, "E": 1, "D": 2}[r.Res]
+        prev = mm[mm.Season < r.Season]
+        base = [(prev.Res == k).mean() for k in ("V", "E", "D")] if len(prev) else [1 / 3] * 3
+        rows.append({
+            "Season": r.Season, "Fecha": r.Date, "Rival": r.Rival, "Home": r.Home, "Res": r.Res,
+            "y": yidx, "pois": to_madrid(pp, r.Home), "elo": to_madrid(pe, r.Home), "base": tuple(base),
+        })
+    if not rows:
+        return None
+    y = np.array([r["y"] for r in rows])
+    Pp = np.array([r["pois"] for r in rows])
+    Pe = np.array([r["elo"] for r in rows])
+    Pb = np.array([r["base"] for r in rows])
+    best_w, best_ll = 0.5, 9e9
+    for w in np.linspace(0, 1, 11):
+        ll = score(w * Pp + (1 - w) * Pe, y)["ll"]
+        if ll < best_ll:
+            best_w, best_ll = float(w), ll
+    Pm = best_w * Pp + (1 - best_w) * Pe
+    res = {
+        "w": best_w, "rows": rows, "Pm": Pm,
+        "mixto": score(Pm, y), "poisson": score(Pp, y), "elo": score(Pe, y), "base": score(Pb, y),
+    }
+    seasons = []
+    for s in test_years:
+        idx = [i for i, r in enumerate(rows) if r["Season"] == s]
+        if not idx:
+            continue
+        real = int(sum(1 for i in idx if rows[i]["y"] == 0))
+        esp = float(Pm[idx, 0].sum())
+        base = float(Pb[idx, 0].sum())
+        seasons.append((f"{s}-{(s + 1) % 100:02d}", len(idx), real, esp, base))
+    res["seasons"] = seasons
+    res["mae_model"] = float(np.mean([abs(s[3] - s[2]) for s in seasons]))
+    res["mae_base"] = float(np.mean([abs(s[4] - s[2]) for s in seasons]))
+    return res
+
 def read_bajas(path):
     csvp = BASE / "bajas.csv"
     if csvp.exists():
@@ -503,8 +561,6 @@ def write_site(site_dir, ctx):
         p10, p50, p90 = pred["resumen"][:3]
         total_wins = v + fut_wins
         total_pts_esperados = pts + fut_pts
-        prob_liga = float(np.clip((total_pts_esperados - 75) / (92 - 75) * 100, 2.0, 98.0))
-        # O usar distribución normal con scipy
         incertidumbre = np.sqrt(max(1, rem)) * 1.6
         prob_liga = float(np.clip((1.0 - norm.cdf(85.0, loc=total_pts_esperados, scale=incertidumbre)) * 100, 2.0, 98.0))
         metodo = "Modelo Poisson + Elo"
@@ -517,7 +573,6 @@ def write_site(site_dir, ctx):
         prob_liga = 35.0
         metodo = "Estimación simple"
     
-    # Buscar posición actual del Madrid en standings
     madrid_pos = "-"
     madrid_dg = 0
     for row in standings:
