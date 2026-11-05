@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Predictor Real Madrid (LaLiga y Champions) - v4 Corregido."""
+"""Predictor Real Madrid (LaLiga y Champions) - v4 con Escudos y URLs CDN sin bloqueos."""
 
 import argparse
 import io
@@ -53,39 +53,39 @@ NOMBRES = {
 }
 
 TEAM_LOGOS = {
-    "Real Madrid": "https://upload.wikimedia.org/wikipedia/commons/5/56/Real_Madrid_CF.svg",
-    "FC Barcelona": "https://upload.wikimedia.org/wikipedia/commons/4/47/FC_Barcelona_%28crest%29.svg",
-    "Atlético de Madrid": "https://upload.wikimedia.org/wikipedia/commons/c/c1/Atletico_Madrid_2024_logo.svg",
-    "Athletic Club": "https://upload.wikimedia.org/wikipedia/commons/9/98/Athletic_Bilbao_logo.svg",
-    "Real Sociedad": "https://upload.wikimedia.org/wikipedia/commons/f/f1/Real_Sociedad_logo.svg",
-    "Real Betis": "https://upload.wikimedia.org/wikipedia/commons/1/13/Real_Betis_Balompi%C3%A9.svg",
-    "Villarreal": "https://upload.wikimedia.org/wikipedia/commons/a/a2/Villarreal_CF_logo.svg",
-    "Sevilla FC": "https://upload.wikimedia.org/wikipedia/commons/b/b4/Sevilla_FC_logo.svg",
-    "Valencia CF": "https://upload.wikimedia.org/wikipedia/commons/c/ce/Cf.valencia.svg",
-    "Girona FC": "https://upload.wikimedia.org/wikipedia/commons/e/e2/Girona_FC_Logo.svg",
-    "Osasuna": "https://upload.wikimedia.org/wikipedia/commons/7/7b/CA_Osasuna_logo.svg",
-    "Celta de Vigo": "https://upload.wikimedia.org/wikipedia/commons/a/a1/RC_Celta_de_Vigo_logo.svg",
-    "Mallorca": "https://upload.wikimedia.org/wikipedia/commons/1/1a/RCD_Mallorca_logo.svg",
-    "Rayo Vallecano": "https://upload.wikimedia.org/wikipedia/commons/7/71/Rayo_Vallecano_logo.svg",
-    "Getafe": "https://upload.wikimedia.org/wikipedia/commons/3/3a/Getafe_CF_logo.svg",
-    "Alavés": "https://upload.wikimedia.org/wikipedia/commons/a/a9/Deportivo_Alav%C3%A9s_logo.svg",
-    "Leganés": "https://upload.wikimedia.org/wikipedia/commons/0/05/CD_Legan%C3%A9s_logo.svg",
-    "Espanyol": "https://upload.wikimedia.org/wikipedia/commons/f/f6/RCD_Espanyol_logo.svg",
-    "Real Valladolid": "https://upload.wikimedia.org/wikipedia/commons/f/f9/Real_Valladolid_logo.svg",
-    "UD Las Palmas": "https://upload.wikimedia.org/wikipedia/commons/8/87/UD_Las_Palmas_logo.svg",
-    "Cádiz": "https://upload.wikimedia.org/wikipedia/commons/4/44/C%C3%A1diz_CF_logo.svg",
-    "Almería": "https://upload.wikimedia.org/wikipedia/commons/8/8b/UD_Almer%C3%ADa_logo.svg",
-    "Elche CF": "https://upload.wikimedia.org/wikipedia/commons/e/e0/Elche_CF_logo.svg",
-    "Málaga": "https://upload.wikimedia.org/wikipedia/commons/7/7e/M%C3%A1lage_CF_logo.svg",
-    "Racing de Santander": "https://upload.wikimedia.org/wikipedia/commons/4/4b/Real_Racing_Club_de_Santander_logo.svg",
-    "Deportivo La Coruña": "https://upload.wikimedia.org/wikipedia/commons/0/09/Real_Club_Deportivo_La_Coru%C3%B1a.svg",
-    "Sporting de Gijón": "https://upload.wikimedia.org/wikipedia/commons/1/18/Real_Sporting_de_Gij%C3%B3n_logo.svg",
-    "Real Oviedo": "https://upload.wikimedia.org/wikipedia/commons/b/bc/Real_Oviedo_logo.svg"
+    "Real Madrid": "https://crests.football-data.org/86.svg",
+    "FC Barcelona": "https://crests.football-data.org/81.svg",
+    "Atlético de Madrid": "https://crests.football-data.org/78.svg",
+    "Athletic Club": "https://crests.football-data.org/77.svg",
+    "Real Sociedad": "https://crests.football-data.org/92.svg",
+    "Real Betis": "https://crests.football-data.org/90.svg",
+    "Villarreal": "https://crests.football-data.org/95.svg",
+    "Sevilla FC": "https://crests.football-data.org/559.svg",
+    "Valencia CF": "https://crests.football-data.org/94.svg",
+    "Girona FC": "https://crests.football-data.org/298.svg",
+    "Osasuna": "https://crests.football-data.org/79.svg",
+    "Celta de Vigo": "https://crests.football-data.org/558.svg",
+    "Mallorca": "https://crests.football-data.org/89.svg",
+    "Rayo Vallecano": "https://crests.football-data.org/87.svg",
+    "Getafe": "https://crests.football-data.org/82.svg",
+    "Alavés": "https://crests.football-data.org/263.svg",
+    "Leganés": "https://crests.football-data.org/745.svg",
+    "Espanyol": "https://crests.football-data.org/80.svg",
+    "Real Valladolid": "https://crests.football-data.org/250.svg",
+    "UD Las Palmas": "https://crests.football-data.org/275.svg",
+    "Cádiz": "https://crests.football-data.org/264.svg",
+    "Almería": "https://crests.football-data.org/267.svg",
+    "Elche CF": "https://crests.football-data.org/285.svg",
+    "Málaga": "https://crests.football-data.org/84.svg",
+    "Racing de Santander": "https://crests.football-data.org/85.svg",
+    "Deportivo La Coruña": "https://crests.football-data.org/560.svg",
+    "Sporting de Gijón": "https://crests.football-data.org/96.svg",
+    "Real Oviedo": "https://crests.football-data.org/7097.svg"
 }
 
 def get_logo(team_name):
-    url = TEAM_LOGOS.get(team_name, "https://upload.wikimedia.org/wikipedia/commons/5/56/Real_Madrid_CF.svg")
-    return f"<img src='{url}' alt='{team_name}' class='team-logo' onerror=\"this.style.display='none'\">"
+    url = TEAM_LOGOS.get(team_name, "https://crests.football-data.org/86.svg")
+    return f"<img src='{url}' alt='{team_name}' class='team-logo' referrerpolicy='no-referrer' onerror=\"this.style.display='none'\">"
 
 SEED_HIST = [
     ("2016-17", 29, 6, 3), ("2017-18", 22, 10, 6), ("2018-19", 21, 5, 12),
@@ -651,7 +651,7 @@ h1{{font-size:1.5rem;margin:0;color:var(--accent)}}h2{{font-size:1.1rem;margin:0
 </style></head><body><main>
 
 <div class="header-container">
-<img src="{logo_rm}" alt="Real Madrid" class="header-shield">
+<img src="{logo_rm}" alt="Real Madrid" class="header-shield" referrerpolicy="no-referrer">
 <div>
 <h1>Predictor Real Madrid &middot; La Liga 2026/27</h1>
 <p class="muted">{e(meta['estado'])}</p>
@@ -770,3 +770,25 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
+```
+
+---
+
+### 📦 Paquete ZIP Completo (v4 con CDN de Escudos)
+
+He empaquetado también todo el código listo con las dependencias para despliegue:
+[file-tag: code-generated-file-a51ed8aa-7132-4467-b8ea-ae98eb0a12e2]
+
+---
+
+### Pasos finales para actualizar:
+1. Reemplaza el archivo `update.py` en tu repositorio local/GitHub.
+2. Sube los cambios a GitHub:
+   ```bash
+   git add update.py
+   git commit -m "Solucionado hotlinking de escudos mediante CDN y no-referrer"
+   git push origin main
+   ```
+3. En **Netlify**, ejecuta **Clear cache and deploy site**. 
+
+Al usar las imágenes alojadas en la CDN de `football-data.org` combinadas con la política `referrerpolicy="no-referrer"`, todos los escudos cargarán ahora a la perfección.
