@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Predictor Real Madrid (LaLiga y Champions) - v4 con Escudos y URLs CDN sin bloqueos."""
+"""Predictor Real Madrid (LaLiga y Champions) - v4 Corregido."""
 
 import argparse
 import io
@@ -73,14 +73,14 @@ TEAM_LOGOS = {
     "Espanyol": "https://crests.football-data.org/80.svg",
     "Real Valladolid": "https://crests.football-data.org/250.svg",
     "UD Las Palmas": "https://crests.football-data.org/275.svg",
-    "Cádiz": "https://crests.football-data.org/264.svg",
+    "Cádiz": "https://crests.football-data.org/558.svg",
     "Almería": "https://crests.football-data.org/267.svg",
     "Elche CF": "https://crests.football-data.org/285.svg",
     "Málaga": "https://crests.football-data.org/84.svg",
     "Racing de Santander": "https://crests.football-data.org/85.svg",
     "Deportivo La Coruña": "https://crests.football-data.org/560.svg",
     "Sporting de Gijón": "https://crests.football-data.org/96.svg",
-    "Real Oviedo": "https://crests.football-data.org/7097.svg"
+    "Real Oviedo": "https://crests.football-data.org/70.svg"
 }
 
 def get_logo(team_name):
@@ -770,25 +770,3 @@ def main():
 
 if __name__ == "__main__":
     sys.exit(main())
-```
-
----
-
-### 📦 Paquete ZIP Completo (v4 con CDN de Escudos)
-
-He empaquetado también todo el código listo con las dependencias para despliegue:
-[file-tag: code-generated-file-a51ed8aa-7132-4467-b8ea-ae98eb0a12e2]
-
----
-
-### Pasos finales para actualizar:
-1. Reemplaza el archivo `update.py` en tu repositorio local/GitHub.
-2. Sube los cambios a GitHub:
-   ```bash
-   git add update.py
-   git commit -m "Solucionado hotlinking de escudos mediante CDN y no-referrer"
-   git push origin main
-   ```
-3. En **Netlify**, ejecuta **Clear cache and deploy site**. 
-
-Al usar las imágenes alojadas en la CDN de `football-data.org` combinadas con la política `referrerpolicy="no-referrer"`, todos los escudos cargarán ahora a la perfección.
